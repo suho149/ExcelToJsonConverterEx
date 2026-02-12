@@ -6,7 +6,13 @@ import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
 import org.apache.poi.ss.usermodel.*;
 
 import java.io.IOException;
-import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -20,6 +26,7 @@ public class ExcelToJsonConverter {
     // 시트 이름 (엑셀에서 실제 이름 그대로 사용)
     private static final String SHEET1_NAME = "Sheet1";
     private static final String SHEET3_NAME = "Sheet3";
+    private static final String SHEET4_NAME = "Sheet4";
 
     // Sheet1 기준
     private static final int SHEET1_HEADER_ROW_INDEX = 1;      // 엑셀 2행 (헤더: company_id, ...)
@@ -30,104 +37,113 @@ public class ExcelToJsonConverter {
     private static final int SHEET3_SOURCE_COL_INDEX = 2;      // C열: 통합정보시스템 컬럼명
     private static final int SHEET3_JSONKEY_COL_INDEX = 3;     // D열: JSON 키 이름
 
+    // Sheet4 기준 (출력 시트)
+    private static final int SHEET4_HEADER_ROW_INDEX = 0;         // 헤더는 1행
+    private static final int SHEET4_DATA_START_ROW_INDEX = 1;     // 데이터는 2행부터
+    private static final int SHEET4_COMPANY_IDX_COL_INDEX = 0;    // A열
+    private static final int SHEET4_JSON_COL_INDEX = 1;           // B열
+
     public static void main(String[] args) throws IOException, InvalidFormatException {
 
-        // resources/excel/exceldata.xlsx를 classpath에서 읽어오기
-        try (InputStream is = ExcelToJsonConverter.class
-                .getClassLoader()
-                .getResourceAsStream(EXCEL_RESOURCE_PATH)) {
+        Path excelPath = Paths.get("src/main/resources").resolve(EXCEL_RESOURCE_PATH);
+        if (!Files.exists(excelPath)) {
+            throw new IllegalStateException("엑셀 파일을 찾을 수 없습니다: " + excelPath.toAbsolutePath());
+        }
 
-            if (is == null) {
-                throw new IllegalStateException(
-                        "엑셀 파일을 classpath에서 찾을 수 없습니다: " + EXCEL_RESOURCE_PATH);
+        try (Workbook workbook = WorkbookFactory.create(excelPath.toFile())) {
+
+            Sheet sheet1 = workbook.getSheet(SHEET1_NAME);
+            Sheet sheet3 = workbook.getSheet(SHEET3_NAME);
+            Sheet sheet4 = workbook.getSheet(SHEET4_NAME);
+
+            if (sheet1 == null || sheet3 == null) {
+                throw new IllegalStateException("Sheet1 또는 Sheet3를 찾을 수 없습니다.");
             }
 
-            try (Workbook workbook = WorkbookFactory.create(is)) {
+            if (sheet4 == null) {
+                sheet4 = workbook.createSheet(SHEET4_NAME);
+            }
+            clearSheet(sheet4);
+            writeSheet4Header(sheet4);
 
-                Sheet sheet1 = workbook.getSheet(SHEET1_NAME);
-                Sheet sheet3 = workbook.getSheet(SHEET3_NAME);
+            // Sheet3에서 매핑 정보 읽기 (C열 = 원본 컬럼명, D열 = JSON 키)
+            LinkedHashMap<String, String> fieldMappings = loadFieldMappings(sheet3);
 
-                if (sheet1 == null || sheet3 == null) {
-                    throw new IllegalStateException("Sheet1 또는 Sheet3를 찾을 수 없습니다.");
+            // Sheet1 헤더(2행) 읽어서 "컬럼명 → 인덱스" 맵 만들기
+            Map<String, Integer> headerIndexMap = buildHeaderIndexMap(sheet1);
+
+            Integer companyIdColIndex = headerIndexMap.get("company_id");
+            if (companyIdColIndex == null) {
+                throw new IllegalStateException("Sheet1 헤더에 'company_id' 컬럼이 없습니다.");
+            }
+
+            // 데이터 행을 돌면서 JSON 생성 후 Sheet4에 기록
+            ObjectMapper mapper = new ObjectMapper();
+            int outputRowIndex = SHEET4_DATA_START_ROW_INDEX;
+
+            int lastRow = sheet1.getLastRowNum();
+            for (int rowIndex = SHEET1_DATA_START_ROW_INDEX; rowIndex <= lastRow; rowIndex++) {
+                Row row = sheet1.getRow(rowIndex);
+                if (row == null) {
+                    continue;
                 }
 
-                // Sheet3에서 매핑 정보 읽기 (C열 = 원본 컬럼명, D열 = JSON 키)
-                LinkedHashMap<String, String> fieldMappings = loadFieldMappings(sheet3);
+                String companyId = getCellString(row.getCell(companyIdColIndex));
+                if (companyId == null || companyId.isBlank()) {
+                    // company_id 비어 있으면 이후 행은 없다고 보고 종료
+                    break;
+                }
 
-                // Sheet1 헤더(2행) 읽어서 "컬럼명 → 인덱스" 맵 만들기
-                Map<String, Integer> headerIndexMap = buildHeaderIndexMap(sheet1);
+                // contents 객체 만들기
+                ObjectNode contentsNode = mapper.createObjectNode();
 
-                // 데이터 행을 돌면서 JSON 생성
-                ObjectMapper mapper = new ObjectMapper();
+                for (Map.Entry<String, String> entry : fieldMappings.entrySet()) {
+                    String sourceColumnName = entry.getKey();  // 예: company_join_date, 없음, 확인중
+                    String jsonKey = entry.getValue();         // 예: defenseDesignationDate
 
-                int lastRow = sheet1.getLastRowNum();
-                for (int rowIndex = SHEET1_DATA_START_ROW_INDEX; rowIndex <= lastRow; rowIndex++) {
-                    Row row = sheet1.getRow(rowIndex);
-                    if (row == null) {
-                        continue;
-                    }
+                    String value;
 
-                    // company_id 컬럼에서 값 가져오기 (COMPANY_IDX 용)
-                    Integer companyIdColIndex = headerIndexMap.get("company_id");
-                    if (companyIdColIndex == null) {
-                        throw new IllegalStateException("Sheet1 헤더에 'company_id' 컬럼이 없습니다.");
-                    }
-
-                    String companyId = getCellString(row.getCell(companyIdColIndex));
-                    if (companyId == null || companyId.isBlank()) {
-                        // company_id 비어 있으면 이후 행은 없다고 보고 종료
-                        break;
-                    }
-
-                    // contents 객체 만들기
-                    ObjectNode contentsNode = mapper.createObjectNode();
-
-                    for (Map.Entry<String, String> entry : fieldMappings.entrySet()) {
-                        String sourceColumnName = entry.getKey();  // 예: company_join_date, 없음, 확인중
-                        String jsonKey = entry.getValue();         // 예: defenseDesignationDate
-
-                        String value;
-
-                        if (sourceColumnName == null ||
-                                sourceColumnName.isBlank() ||
-                                "없음".equals(sourceColumnName) ||
-                                "확인중".equals(sourceColumnName)) {
-                            // 원본 컬럼이 없거나 "없음"/"확인중"인 경우 → 빈 문자열
+                    if (sourceColumnName == null ||
+                            sourceColumnName.isBlank() ||
+                            "없음".equals(sourceColumnName) ||
+                            "확인중".equals(sourceColumnName)) {
+                        // 원본 컬럼이 없거나 "없음"/"확인중"인 경우 → 빈 문자열
+                        value = "";
+                    } else {
+                        Integer colIndex = headerIndexMap.get(sourceColumnName);
+                        if (colIndex == null) {
+                            // 매핑에는 있는데 실제 Sheet1 헤더엔 없으면 빈값
                             value = "";
                         } else {
-                            Integer colIndex = headerIndexMap.get(sourceColumnName);
-                            if (colIndex == null) {
-                                // 매핑에는 있는데 실제 Sheet1 헤더엔 없으면 빈값
-                                value = "";
-                            } else {
-                                value = getCellString(row.getCell(colIndex));
-                            }
+                            value = getCellString(row.getCell(colIndex));
                         }
-
-                        contentsNode.put(jsonKey, value == null ? "" : value);
                     }
 
-                    // JSON 전체 구조 만들기
-                    ObjectNode companyInfoNode = mapper.createObjectNode();
-                    companyInfoNode.set("contents", contentsNode);
-
-                    ObjectNode dataNode = mapper.createObjectNode();
-                    dataNode.set("companyInfo", companyInfoNode);
-
-                    ObjectNode rootNode = mapper.createObjectNode();
-                    rootNode.set("data", dataNode);
-
-                    // 콘솔에 "COMPANY_IDX = ..." 와 JSON 출력
-                    String jsonString = mapper.writerWithDefaultPrettyPrinter()
-                            .writeValueAsString(rootNode);
-
-                    System.out.println("COMPANY_IDX=" + companyId);
-                    System.out.println(jsonString);
-                    System.out.println("--------------------------------------------------");
+                    contentsNode.put(jsonKey, value == null ? "" : value);
                 }
 
-                System.out.println("변환 완료");
+                // JSON 전체 구조 만들기
+                ObjectNode companyInfoNode = mapper.createObjectNode();
+                companyInfoNode.set("contents", contentsNode);
+
+                ObjectNode dataNode = mapper.createObjectNode();
+                dataNode.set("companyInfo", companyInfoNode);
+
+                ObjectNode rootNode = mapper.createObjectNode();
+                rootNode.set("data", dataNode);
+
+                String jsonString = mapper.writeValueAsString(rootNode);
+
+                Row outputRow = sheet4.createRow(outputRowIndex++);
+                outputRow.createCell(SHEET4_COMPANY_IDX_COL_INDEX).setCellValue(companyId);
+                outputRow.createCell(SHEET4_JSON_COL_INDEX).setCellValue(jsonString);
             }
+
+            sheet4.autoSizeColumn(SHEET4_COMPANY_IDX_COL_INDEX);
+
+            saveWorkbookSafely(workbook, excelPath);
+
+            System.out.println("변환 완료: " + excelPath.toAbsolutePath() + " (" + SHEET4_NAME + " 시트)");
         }
     }
 
@@ -160,6 +176,40 @@ public class ExcelToJsonConverter {
             mappings.put(src == null ? "" : src.trim(), jsonKey.trim());
         }
         return mappings;
+    }
+
+    private static void clearSheet(Sheet sheet) {
+        for (int rowIndex = sheet.getLastRowNum(); rowIndex >= 0; rowIndex--) {
+            Row row = sheet.getRow(rowIndex);
+            if (row != null) {
+                sheet.removeRow(row);
+            }
+        }
+    }
+
+    private static void writeSheet4Header(Sheet sheet4) {
+        Row headerRow = sheet4.createRow(SHEET4_HEADER_ROW_INDEX);
+        headerRow.createCell(SHEET4_COMPANY_IDX_COL_INDEX).setCellValue("COMPANY_IDX");
+        headerRow.createCell(SHEET4_JSON_COL_INDEX).setCellValue("JSON");
+    }
+
+    private static void saveWorkbookSafely(Workbook workbook, Path excelPath) throws IOException {
+        Path tempPath = excelPath.resolveSibling(excelPath.getFileName() + ".tmp");
+
+        try (OutputStream os = Files.newOutputStream(
+                tempPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            workbook.write(os);
+        }
+
+        try {
+            Files.move(
+                    tempPath,
+                    excelPath,
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(tempPath, excelPath, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     /**
