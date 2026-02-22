@@ -6,7 +6,9 @@ import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
 import org.apache.poi.ss.usermodel.*;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,7 +52,10 @@ public class ExcelToJsonConverter {
             throw new IllegalStateException("엑셀 파일을 찾을 수 없습니다: " + excelPath.toAbsolutePath());
         }
 
-        try (Workbook workbook = WorkbookFactory.create(excelPath.toFile())) {
+        // Windows에서는 원본 파일을 File로 열어 둔 상태에서 교체(move)하면 잠금 오류가 날 수 있어
+        // InputStream으로 읽어 메모리로 로드한 뒤 저장 시 교체한다.
+        try (InputStream is = Files.newInputStream(excelPath);
+             Workbook workbook = WorkbookFactory.create(is)) {
 
             Sheet sheet1 = workbook.getSheet(SHEET1_NAME);
             Sheet sheet3 = workbook.getSheet(SHEET3_NAME);
@@ -208,7 +213,15 @@ public class ExcelToJsonConverter {
                     StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tempPath, excelPath, StandardCopyOption.REPLACE_EXISTING);
+            try {
+                Files.move(tempPath, excelPath, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AccessDeniedException ex) {
+                throw new IOException("엑셀 파일이 다른 프로세스에서 사용 중입니다. 파일을 닫고 다시 시도하세요: "
+                        + excelPath.toAbsolutePath(), ex);
+            }
+        } catch (AccessDeniedException e) {
+            throw new IOException("엑셀 파일이 다른 프로세스에서 사용 중입니다. 파일을 닫고 다시 시도하세요: "
+                    + excelPath.toAbsolutePath(), e);
         }
     }
 
