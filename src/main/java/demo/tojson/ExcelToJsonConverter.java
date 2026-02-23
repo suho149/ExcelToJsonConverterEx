@@ -24,6 +24,8 @@ public class ExcelToJsonConverter {
     // classpath 기준 엑셀 파일 위치 (src/main/resources 아래)
     // src/main/resources/excel/exceldata.xlsx
     private static final String EXCEL_RESOURCE_PATH = "excel/exceldata.xlsx";
+    private static final Path PROJECT_DEFAULT_EXCEL_PATH = Paths.get("src/main/resources").resolve(EXCEL_RESOURCE_PATH);
+    private static final Path APP_DEFAULT_EXCEL_PATH = Paths.get("excel").resolve("exceldata.xlsx");
 
     // 시트 이름 (엑셀에서 실제 이름 그대로 사용)
     private static final String SHEET1_NAME = "Sheet1";
@@ -46,16 +48,27 @@ public class ExcelToJsonConverter {
     private static final int SHEET4_JSON_COL_INDEX = 1;           // B열
 
     public static void main(String[] args) throws IOException, InvalidFormatException {
+        // CLI 환경(서버/터미널)에서도 POI 컬럼 폭 계산이 안정적으로 동작하도록 headless 고정
+        System.setProperty("java.awt.headless", "true");
 
-        Path excelPath = Paths.get("src/main/resources").resolve(EXCEL_RESOURCE_PATH);
-        if (!Files.exists(excelPath)) {
-            throw new IllegalStateException("엑셀 파일을 찾을 수 없습니다: " + excelPath.toAbsolutePath());
+        Path inputExcelPath = resolveDefaultExcelPath().toAbsolutePath().normalize();
+        Path outputExcelPath = inputExcelPath;
+
+        if (!Files.exists(inputExcelPath)) {
+            throw new IllegalStateException("입력 엑셀 파일을 찾을 수 없습니다: " + inputExcelPath
+                    + System.lineSeparator()
+                    + "확인 경로: " + PROJECT_DEFAULT_EXCEL_PATH.toAbsolutePath().normalize()
+                    + " 또는 " + APP_DEFAULT_EXCEL_PATH.toAbsolutePath().normalize());
         }
 
         // Windows에서는 원본 파일을 File로 열어 둔 상태에서 교체(move)하면 잠금 오류가 날 수 있어
         // InputStream으로 읽어 메모리로 로드한 뒤 저장 시 교체한다.
-        try (InputStream is = Files.newInputStream(excelPath);
-             Workbook workbook = WorkbookFactory.create(is)) {
+        Workbook workbook;
+        try (InputStream is = Files.newInputStream(inputExcelPath)) {
+            workbook = WorkbookFactory.create(is);
+        }
+
+        try (workbook) {
 
             Sheet sheet1 = workbook.getSheet(SHEET1_NAME);
             Sheet sheet3 = workbook.getSheet(SHEET3_NAME);
@@ -146,10 +159,20 @@ public class ExcelToJsonConverter {
 
             sheet4.autoSizeColumn(SHEET4_COMPANY_IDX_COL_INDEX);
 
-            saveWorkbookSafely(workbook, excelPath);
+            saveWorkbookSafely(workbook, outputExcelPath);
 
-            System.out.println("변환 완료: " + excelPath.toAbsolutePath() + " (" + SHEET4_NAME + " 시트)");
+            System.out.println("변환 완료: " + outputExcelPath + " (" + SHEET4_NAME + " 시트)");
         }
+    }
+
+    private static Path resolveDefaultExcelPath() {
+        if (Files.exists(PROJECT_DEFAULT_EXCEL_PATH)) {
+            return PROJECT_DEFAULT_EXCEL_PATH;
+        }
+        if (Files.exists(APP_DEFAULT_EXCEL_PATH)) {
+            return APP_DEFAULT_EXCEL_PATH;
+        }
+        return PROJECT_DEFAULT_EXCEL_PATH;
     }
 
     /**
@@ -199,6 +222,11 @@ public class ExcelToJsonConverter {
     }
 
     private static void saveWorkbookSafely(Workbook workbook, Path excelPath) throws IOException {
+        Path parent = excelPath.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+
         Path tempPath = excelPath.resolveSibling(excelPath.getFileName() + ".tmp");
 
         try (OutputStream os = Files.newOutputStream(
