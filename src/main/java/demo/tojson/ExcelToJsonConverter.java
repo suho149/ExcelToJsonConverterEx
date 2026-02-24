@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 public class ExcelToJsonConverter {
 
@@ -78,6 +79,8 @@ public class ExcelToJsonConverter {
     private static final String SQL_OUTPUT_DIR_NAME = "output";
     private static final String SQL_FILE_PREFIX = "sheet4_insert_";
     private static final String SQL_TARGET_TABLE = "T_COMPANY_INFO";
+    private static final String RANDOM_COMPANY_IDX_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    private static final int RANDOM_COMPANY_IDX_LENGTH = 6;
     private static final String[] SHEET4_HEADERS = {
             "COMPANY_IDX",
             "CONTENTS",
@@ -240,7 +243,7 @@ public class ExcelToJsonConverter {
                 outputRow.createCell(SHEET4_UPDATE_DATE_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
 
                 sqlRows.add(new SqlInsertRow(
-                        companyId,
+                        generateRandomCompanyIdx(),
                         jsonString,
                         companySize,
                         resolvedDefenseYn,
@@ -396,6 +399,15 @@ public class ExcelToJsonConverter {
     private static String quoteSql(String value) {
         String normalized = value == null ? "" : value;
         return "'" + normalized.replace("'", "''") + "'";
+    }
+
+    private static String generateRandomCompanyIdx() {
+        StringBuilder sb = new StringBuilder(RANDOM_COMPANY_IDX_LENGTH);
+        for (int i = 0; i < RANDOM_COMPANY_IDX_LENGTH; i++) {
+            int randomIndex = ThreadLocalRandom.current().nextInt(RANDOM_COMPANY_IDX_CHARS.length());
+            sb.append(RANDOM_COMPANY_IDX_CHARS.charAt(randomIndex));
+        }
+        return sb.toString();
     }
 
     private static String getFirstAvailableCellValue(
