@@ -5,9 +5,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
 import org.apache.poi.ss.usermodel.*;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -16,9 +18,12 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public class ExcelToJsonConverter {
@@ -69,6 +74,10 @@ public class ExcelToJsonConverter {
     private static final String DEFAULT_CREATE_IP = "0:0:0:0:0:0:0:756";
     private static final String DEFAULT_UPDATE_VALUE = "\\N";
     private static final DateTimeFormatter CREATE_DATE_FORMATTER = DateTimeFormatter.ofPattern("yy.MM.d");
+    private static final DateTimeFormatter SQL_FILE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+    private static final String SQL_OUTPUT_DIR_NAME = "output";
+    private static final String SQL_FILE_PREFIX = "sheet4_insert_";
+    private static final String SQL_TARGET_TABLE = "T_COMPANY_INFO";
     private static final String[] SHEET4_HEADERS = {
             "COMPANY_IDX",
             "CONTENTS",
@@ -83,6 +92,21 @@ public class ExcelToJsonConverter {
             "UPDATE_IP",
             "UPDATE_DATE"
     };
+
+    private record SqlInsertRow(
+            String companyIdx,
+            String contents,
+            String companySize,
+            String defenseDesignationYn,
+            String defenseDesignationDate,
+            String delYn,
+            String createId,
+            String createIp,
+            String createDate,
+            String updateId,
+            String updateIp,
+            String updateDate) {
+    }
 
     public static void main(String[] args) throws IOException, InvalidFormatException {
         // CLI 환경(서버/터미널)에서도 POI 컬럼 폭 계산이 안정적으로 동작하도록 headless 고정
@@ -135,6 +159,7 @@ public class ExcelToJsonConverter {
             // 데이터 행을 돌면서 JSON 생성 후 Sheet4에 기록
             ObjectMapper mapper = new ObjectMapper();
             int outputRowIndex = SHEET4_DATA_START_ROW_INDEX;
+            List<SqlInsertRow> sqlRows = new ArrayList<>();
 
             int lastRow = sheet1.getLastRowNum();
             for (int rowIndex = SHEET1_DATA_START_ROW_INDEX; rowIndex <= lastRow; rowIndex++) {
@@ -196,30 +221,47 @@ public class ExcelToJsonConverter {
                         row, headerIndexMap, "defense_designation_yn", "defenseDesignationYn");
                 String defenseDesignationDate = getFirstAvailableCellValue(
                         row, headerIndexMap, "defense_designation_date", "defenseDesignationDate");
+                String createDate = LocalDate.now().format(CREATE_DATE_FORMATTER);
+                String resolvedDefenseYn = defaultIfBlank(defenseDesignationYn, DEFAULT_DEFENSE_DESIGNATION_YN);
+                String resolvedDefenseDate = defaultIfBlank(defenseDesignationDate, DEFAULT_DEFENSE_DESIGNATION_DATE);
 
                 Row outputRow = sheet4.createRow(outputRowIndex++);
                 outputRow.createCell(SHEET4_COMPANY_IDX_COL_INDEX).setCellValue(companyId);
                 outputRow.createCell(SHEET4_CONTENTS_COL_INDEX).setCellValue(jsonString);
                 outputRow.createCell(SHEET4_COMPANY_SIZE_COL_INDEX).setCellValue(companySize);
-                outputRow.createCell(SHEET4_DEFENSE_YN_COL_INDEX)
-                        .setCellValue(defaultIfBlank(defenseDesignationYn, DEFAULT_DEFENSE_DESIGNATION_YN));
-                outputRow.createCell(SHEET4_DEFENSE_DATE_COL_INDEX)
-                        .setCellValue(defaultIfBlank(defenseDesignationDate, DEFAULT_DEFENSE_DESIGNATION_DATE));
+                outputRow.createCell(SHEET4_DEFENSE_YN_COL_INDEX).setCellValue(resolvedDefenseYn);
+                outputRow.createCell(SHEET4_DEFENSE_DATE_COL_INDEX).setCellValue(resolvedDefenseDate);
                 outputRow.createCell(SHEET4_DEL_YN_COL_INDEX).setCellValue(DEFAULT_DEL_YN);
                 outputRow.createCell(SHEET4_CREATE_ID_COL_INDEX).setCellValue(DEFAULT_CREATE_ID);
                 outputRow.createCell(SHEET4_CREATE_IP_COL_INDEX).setCellValue(DEFAULT_CREATE_IP);
-                outputRow.createCell(SHEET4_CREATE_DATE_COL_INDEX)
-                        .setCellValue(LocalDate.now().format(CREATE_DATE_FORMATTER));
+                outputRow.createCell(SHEET4_CREATE_DATE_COL_INDEX).setCellValue(createDate);
                 outputRow.createCell(SHEET4_UPDATE_ID_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
                 outputRow.createCell(SHEET4_UPDATE_IP_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
                 outputRow.createCell(SHEET4_UPDATE_DATE_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
+
+                sqlRows.add(new SqlInsertRow(
+                        companyId,
+                        jsonString,
+                        companySize,
+                        resolvedDefenseYn,
+                        resolvedDefenseDate,
+                        DEFAULT_DEL_YN,
+                        DEFAULT_CREATE_ID,
+                        DEFAULT_CREATE_IP,
+                        createDate,
+                        DEFAULT_UPDATE_VALUE,
+                        DEFAULT_UPDATE_VALUE,
+                        DEFAULT_UPDATE_VALUE
+                ));
             }
 
             resizeSheet4Columns(sheet4);
 
             saveWorkbookSafely(workbook, outputExcelPath);
+            Path sqlOutputPath = writeInsertSqlFile(outputExcelPath, sqlRows);
 
             System.out.println("변환 완료: " + outputExcelPath + " (" + SHEET4_NAME + " 시트)");
+            System.out.println("SQL 출력 완료: " + sqlOutputPath);
         }
     }
 
@@ -296,6 +338,64 @@ public class ExcelToJsonConverter {
 
         // JSON 컬럼은 autosize 영향 없이 고정 폭으로 유지
         sheet4.setColumnWidth(SHEET4_CONTENTS_COL_INDEX, SHEET4_CONTENTS_FIXED_WIDTH);
+    }
+
+    private static Path writeInsertSqlFile(Path excelPath, List<SqlInsertRow> sqlRows) throws IOException {
+        Path outputDir = resolveSqlOutputDir(excelPath);
+        Files.createDirectories(outputDir);
+
+        String fileName = SQL_FILE_PREFIX + LocalDateTime.now().format(SQL_FILE_TIME_FORMATTER) + ".sql";
+        Path sqlPath = outputDir.resolve(fileName);
+
+        try (BufferedWriter writer = Files.newBufferedWriter(
+                sqlPath, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            for (SqlInsertRow row : sqlRows) {
+                writer.write(buildInsertSql(row));
+                writer.newLine();
+            }
+        }
+
+        return sqlPath.toAbsolutePath().normalize();
+    }
+
+    private static Path resolveSqlOutputDir(Path excelPath) {
+        Path parent = excelPath.getParent();
+        if (parent == null) {
+            return Paths.get(SQL_OUTPUT_DIR_NAME);
+        }
+
+        Path folderName = parent.getFileName();
+        if (folderName != null && "excel".equalsIgnoreCase(folderName.toString())) {
+            Path sibling = parent.resolveSibling(SQL_OUTPUT_DIR_NAME);
+            if (sibling != null) {
+                return sibling;
+            }
+        }
+
+        return parent.resolve(SQL_OUTPUT_DIR_NAME);
+    }
+
+    private static String buildInsertSql(SqlInsertRow row) {
+        return "INSERT INTO " + SQL_TARGET_TABLE
+                + " (COMPANY_IDX, CONTENTS, COMPANY_SIZE, DEFENSE_DESIGNATION_YN, DEFENSE_DESIGNATION_DATE, "
+                + "DEL_YN, CREATE_ID, CREATE_IP, CREATE_DATE, UPDATE_ID, UPDATE_IP, UPDATE_DATE) VALUES ("
+                + quoteSql(row.companyIdx()) + ", "
+                + quoteSql(row.contents()) + ", "
+                + quoteSql(row.companySize()) + ", "
+                + quoteSql(row.defenseDesignationYn()) + ", "
+                + quoteSql(row.defenseDesignationDate()) + ", "
+                + quoteSql(row.delYn()) + ", "
+                + quoteSql(row.createId()) + ", "
+                + quoteSql(row.createIp()) + ", "
+                + quoteSql(row.createDate()) + ", "
+                + quoteSql(row.updateId()) + ", "
+                + quoteSql(row.updateIp()) + ", "
+                + quoteSql(row.updateDate()) + ");";
+    }
+
+    private static String quoteSql(String value) {
+        String normalized = value == null ? "" : value;
+        return "'" + normalized.replace("'", "''") + "'";
     }
 
     private static String getFirstAvailableCellValue(
