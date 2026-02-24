@@ -15,6 +15,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -44,8 +46,43 @@ public class ExcelToJsonConverter {
     // Sheet4 기준 (출력 시트)
     private static final int SHEET4_HEADER_ROW_INDEX = 0;         // 헤더는 1행
     private static final int SHEET4_DATA_START_ROW_INDEX = 1;     // 데이터는 2행부터
-    private static final int SHEET4_COMPANY_IDX_COL_INDEX = 0;    // A열
-    private static final int SHEET4_JSON_COL_INDEX = 1;           // B열
+    private static final int SHEET4_COMPANY_IDX_COL_INDEX = 0;              // A열
+    private static final int SHEET4_CONTENTS_COL_INDEX = 1;                 // B열
+    private static final int SHEET4_COMPANY_SIZE_COL_INDEX = 2;             // C열
+    private static final int SHEET4_DEFENSE_YN_COL_INDEX = 3;               // D열
+    private static final int SHEET4_DEFENSE_DATE_COL_INDEX = 4;             // E열
+    private static final int SHEET4_DEL_YN_COL_INDEX = 5;                   // F열
+    private static final int SHEET4_CREATE_ID_COL_INDEX = 6;                // G열
+    private static final int SHEET4_CREATE_IP_COL_INDEX = 7;                // H열
+    private static final int SHEET4_CREATE_DATE_COL_INDEX = 8;              // I열
+    private static final int SHEET4_UPDATE_ID_COL_INDEX = 9;                // J열
+    private static final int SHEET4_UPDATE_IP_COL_INDEX = 10;               // K열
+    private static final int SHEET4_UPDATE_DATE_COL_INDEX = 11;             // L열
+    private static final int SHEET4_TOTAL_COLUMN_COUNT = 12;
+    private static final int EXCEL_MAX_COLUMN_WIDTH = 255 * 256;
+    private static final int SHEET4_CONTENTS_FIXED_WIDTH = 60 * 256; // JSON 컬럼 폭 고정
+
+    private static final String DEFAULT_DEFENSE_DESIGNATION_YN = "Y";
+    private static final String DEFAULT_DEFENSE_DESIGNATION_DATE = "1900.1.1";
+    private static final String DEFAULT_DEL_YN = "N";
+    private static final String DEFAULT_CREATE_ID = "root01";
+    private static final String DEFAULT_CREATE_IP = "0:0:0:0:0:0:0:756";
+    private static final String DEFAULT_UPDATE_VALUE = "\\N";
+    private static final DateTimeFormatter CREATE_DATE_FORMATTER = DateTimeFormatter.ofPattern("yy.MM.d");
+    private static final String[] SHEET4_HEADERS = {
+            "COMPANY_IDX",
+            "CONTENTS",
+            "COMPANY_SIZE",
+            "DEFENSE_DESIGNATION_YN",
+            "DEFENSE_DESIGNATION_DATE",
+            "DEL_YN",
+            "CREATE_ID",
+            "CREATE_IP",
+            "CREATE_DATE",
+            "UPDATE_ID",
+            "UPDATE_IP",
+            "UPDATE_DATE"
+    };
 
     public static void main(String[] args) throws IOException, InvalidFormatException {
         // CLI 환경(서버/터미널)에서도 POI 컬럼 폭 계산이 안정적으로 동작하도록 headless 고정
@@ -152,12 +189,33 @@ public class ExcelToJsonConverter {
 
                 String jsonString = mapper.writeValueAsString(rootNode);
 
+                String companySizeRaw = getFirstAvailableCellValue(
+                        row, headerIndexMap, "company_size", "companySize");
+                String companySize = convertCompanySize(companySizeRaw);
+                String defenseDesignationYn = getFirstAvailableCellValue(
+                        row, headerIndexMap, "defense_designation_yn", "defenseDesignationYn");
+                String defenseDesignationDate = getFirstAvailableCellValue(
+                        row, headerIndexMap, "defense_designation_date", "defenseDesignationDate");
+
                 Row outputRow = sheet4.createRow(outputRowIndex++);
                 outputRow.createCell(SHEET4_COMPANY_IDX_COL_INDEX).setCellValue(companyId);
-                outputRow.createCell(SHEET4_JSON_COL_INDEX).setCellValue(jsonString);
+                outputRow.createCell(SHEET4_CONTENTS_COL_INDEX).setCellValue(jsonString);
+                outputRow.createCell(SHEET4_COMPANY_SIZE_COL_INDEX).setCellValue(companySize);
+                outputRow.createCell(SHEET4_DEFENSE_YN_COL_INDEX)
+                        .setCellValue(defaultIfBlank(defenseDesignationYn, DEFAULT_DEFENSE_DESIGNATION_YN));
+                outputRow.createCell(SHEET4_DEFENSE_DATE_COL_INDEX)
+                        .setCellValue(defaultIfBlank(defenseDesignationDate, DEFAULT_DEFENSE_DESIGNATION_DATE));
+                outputRow.createCell(SHEET4_DEL_YN_COL_INDEX).setCellValue(DEFAULT_DEL_YN);
+                outputRow.createCell(SHEET4_CREATE_ID_COL_INDEX).setCellValue(DEFAULT_CREATE_ID);
+                outputRow.createCell(SHEET4_CREATE_IP_COL_INDEX).setCellValue(DEFAULT_CREATE_IP);
+                outputRow.createCell(SHEET4_CREATE_DATE_COL_INDEX)
+                        .setCellValue(LocalDate.now().format(CREATE_DATE_FORMATTER));
+                outputRow.createCell(SHEET4_UPDATE_ID_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
+                outputRow.createCell(SHEET4_UPDATE_IP_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
+                outputRow.createCell(SHEET4_UPDATE_DATE_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
             }
 
-            sheet4.autoSizeColumn(SHEET4_COMPANY_IDX_COL_INDEX);
+            resizeSheet4Columns(sheet4);
 
             saveWorkbookSafely(workbook, outputExcelPath);
 
@@ -217,8 +275,62 @@ public class ExcelToJsonConverter {
 
     private static void writeSheet4Header(Sheet sheet4) {
         Row headerRow = sheet4.createRow(SHEET4_HEADER_ROW_INDEX);
-        headerRow.createCell(SHEET4_COMPANY_IDX_COL_INDEX).setCellValue("COMPANY_IDX");
-        headerRow.createCell(SHEET4_JSON_COL_INDEX).setCellValue("JSON");
+        for (int colIndex = 0; colIndex < SHEET4_HEADERS.length; colIndex++) {
+            headerRow.createCell(colIndex).setCellValue(SHEET4_HEADERS[colIndex]);
+        }
+    }
+
+    private static void resizeSheet4Columns(Sheet sheet4) {
+        for (int colIndex = 0; colIndex < SHEET4_TOTAL_COLUMN_COUNT; colIndex++) {
+            if (colIndex == SHEET4_CONTENTS_COL_INDEX) {
+                continue;
+            }
+
+            sheet4.autoSizeColumn(colIndex);
+
+            int minWidthByHeader = Math.min((SHEET4_HEADERS[colIndex].length() + 4) * 256, EXCEL_MAX_COLUMN_WIDTH);
+            if (sheet4.getColumnWidth(colIndex) < minWidthByHeader) {
+                sheet4.setColumnWidth(colIndex, minWidthByHeader);
+            }
+        }
+
+        // JSON 컬럼은 autosize 영향 없이 고정 폭으로 유지
+        sheet4.setColumnWidth(SHEET4_CONTENTS_COL_INDEX, SHEET4_CONTENTS_FIXED_WIDTH);
+    }
+
+    private static String getFirstAvailableCellValue(
+            Row row, Map<String, Integer> headerIndexMap, String... columnNames) {
+        for (String columnName : columnNames) {
+            Integer colIndex = headerIndexMap.get(columnName);
+            if (colIndex == null) {
+                continue;
+            }
+            String value = getCellString(row.getCell(colIndex));
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    private static String convertCompanySize(String value) {
+        if (value == null || value.isBlank()) {
+            return "LARGE";
+        }
+        if ("0".equals(value)) {
+            return "LARGE";
+        }
+        if ("1".equals(value)) {
+            return "SMALL";
+        }
+        return value;
+    }
+
+    private static String defaultIfBlank(String value, String defaultValue) {
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        return value;
     }
 
     private static void saveWorkbookSafely(Workbook workbook, Path excelPath) throws IOException {
