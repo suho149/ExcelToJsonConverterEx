@@ -28,11 +28,11 @@ import java.util.concurrent.ThreadLocalRandom;
 
 public class ExcelToJsonConverter {
 
-    // classpath 기준 엑셀 파일 위치 (src/main/resources 아래)
-    // src/main/resources/excel/exceldata.xlsx
-    private static final String EXCEL_RESOURCE_PATH = "excel/exceldata.xlsx";
+    // 기본 입력 파일 위치 (src/main/resources/excel 또는 실행 경로의 excel 폴더)
+    private static final String DEFAULT_EXCEL_FILE_NAME = "exceldata.xlsx";
+    private static final String EXCEL_RESOURCE_PATH = "excel/" + DEFAULT_EXCEL_FILE_NAME;
     private static final Path PROJECT_DEFAULT_EXCEL_PATH = Paths.get("src/main/resources").resolve(EXCEL_RESOURCE_PATH);
-    private static final Path APP_DEFAULT_EXCEL_PATH = Paths.get("excel").resolve("exceldata.xlsx");
+    private static final Path APP_DEFAULT_EXCEL_PATH = Paths.get("excel").resolve(DEFAULT_EXCEL_FILE_NAME);
 
     // 시트 이름 (엑셀에서 실제 이름 그대로 사용)
     private static final String SHEET1_NAME = "Sheet1";
@@ -114,14 +114,18 @@ public class ExcelToJsonConverter {
         // CLI 환경(서버/터미널)에서도 POI 컬럼 폭 계산이 안정적으로 동작하도록 headless 고정
         System.setProperty("java.awt.headless", "true");
 
-        Path inputExcelPath = resolveDefaultExcelPath().toAbsolutePath().normalize();
+        Path inputExcelPath = resolveInputExcelPath(args).toAbsolutePath().normalize();
         Path outputExcelPath = inputExcelPath;
 
         if (!Files.exists(inputExcelPath)) {
             throw new IllegalStateException("입력 엑셀 파일을 찾을 수 없습니다: " + inputExcelPath
                     + System.lineSeparator()
                     + "확인 경로: " + PROJECT_DEFAULT_EXCEL_PATH.toAbsolutePath().normalize()
-                    + " 또는 " + APP_DEFAULT_EXCEL_PATH.toAbsolutePath().normalize());
+                    + " 또는 " + APP_DEFAULT_EXCEL_PATH.toAbsolutePath().normalize()
+                    + System.lineSeparator()
+                    + "또는 excel 폴더에 xlsx/xlsm/xls 파일 1개를 두고 실행하세요."
+                    + System.lineSeparator()
+                    + "여러 파일이 있으면 실행 인자로 파일 경로를 지정해야 합니다.");
         }
 
         // Windows에서는 원본 파일을 File로 열어 둔 상태에서 교체(move)하면 잠금 오류가 날 수 있어
@@ -264,14 +268,70 @@ public class ExcelToJsonConverter {
         }
     }
 
-    private static Path resolveDefaultExcelPath() {
+    private static Path resolveInputExcelPath(String[] args) throws IOException {
+        if (args != null && args.length > 0 && args[0] != null && !args[0].isBlank()) {
+            return Paths.get(args[0].trim());
+        }
+
         if (Files.exists(PROJECT_DEFAULT_EXCEL_PATH)) {
             return PROJECT_DEFAULT_EXCEL_PATH;
         }
         if (Files.exists(APP_DEFAULT_EXCEL_PATH)) {
             return APP_DEFAULT_EXCEL_PATH;
         }
+
+        Path projectDetected = findSingleExcelFile(PROJECT_DEFAULT_EXCEL_PATH.getParent());
+        if (projectDetected != null) {
+            return projectDetected;
+        }
+
+        Path appDetected = findSingleExcelFile(APP_DEFAULT_EXCEL_PATH.getParent());
+        if (appDetected != null) {
+            return appDetected;
+        }
+
         return PROJECT_DEFAULT_EXCEL_PATH;
+    }
+
+    private static Path findSingleExcelFile(Path directory) throws IOException {
+        if (directory == null || !Files.isDirectory(directory)) {
+            return null;
+        }
+
+        List<Path> excelFiles;
+        try (var pathStream = Files.list(directory)) {
+            excelFiles = pathStream
+                    .filter(Files::isRegularFile)
+                    .filter(ExcelToJsonConverter::isExcelFile)
+                    .sorted((left, right) -> left.getFileName().toString()
+                            .compareToIgnoreCase(right.getFileName().toString()))
+                    .toList();
+        }
+
+        if (excelFiles.isEmpty()) {
+            return null;
+        }
+
+        if (excelFiles.size() == 1) {
+            return excelFiles.get(0);
+        }
+
+        throw new IllegalStateException("엑셀 파일이 2개 이상입니다: " + directory.toAbsolutePath().normalize()
+                + System.lineSeparator()
+                + "excel 폴더에는 엑셀 파일 1개만 두거나,"
+                + System.lineSeparator()
+                + "실행 인자로 파일 경로를 지정하세요.");
+    }
+
+    private static boolean isExcelFile(Path file) {
+        String fileName = file.getFileName().toString().toLowerCase();
+        if (fileName.startsWith("~$")) {
+            // Excel 임시 잠금 파일은 제외
+            return false;
+        }
+        return fileName.endsWith(".xlsx")
+                || fileName.endsWith(".xlsm")
+                || fileName.endsWith(".xls");
     }
 
     /**

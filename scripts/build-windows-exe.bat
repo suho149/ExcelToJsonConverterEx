@@ -26,7 +26,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set "APP_NAME=ExcelToJsonConverter"
+set "APP_NAME=CreateInsertSql"
 set "DIST_DIR=dist"
 
 if exist "%DIST_DIR%\%APP_NAME%" (
@@ -70,7 +70,7 @@ echo Build completed.
 echo Run this file:
 echo   %DIST_DIR%\%APP_NAME%\%APP_NAME%.exe
 echo.
-echo Default input file:
-echo   %DIST_DIR%\%APP_NAME%\excel\exceldata.xlsx
+echo Input folder:
+echo   %DIST_DIR%\%APP_NAME%\excel\  (Excel file 1ea, filename free)
 
 exit /b 0
