@@ -75,6 +75,7 @@ public class ExcelToJsonConverter {
     private static final String DEFAULT_CREATE_IP = "0:0:0:0:0:0:0:756";
     private static final String DEFAULT_UPDATE_VALUE = "\\N";
     private static final DateTimeFormatter CREATE_DATE_FORMATTER = DateTimeFormatter.ofPattern("yy.MM.d");
+    private static final DateTimeFormatter SQL_CREATE_DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter SQL_FILE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
     private static final String SQL_OUTPUT_DIR_NAME = "output";
     private static final String SQL_FILE_PREFIX = "sheet4_insert_";
@@ -225,6 +226,7 @@ public class ExcelToJsonConverter {
                 String defenseDesignationDate = getFirstAvailableCellValue(
                         row, headerIndexMap, "defense_designation_date", "defenseDesignationDate");
                 String createDate = LocalDate.now().format(CREATE_DATE_FORMATTER);
+                String sqlCreateDateTime = LocalDateTime.now().format(SQL_CREATE_DATE_TIME_FORMATTER);
                 String resolvedDefenseYn = defaultIfBlank(defenseDesignationYn, DEFAULT_DEFENSE_DESIGNATION_YN);
                 String resolvedDefenseDate = defaultIfBlank(defenseDesignationDate, DEFAULT_DEFENSE_DESIGNATION_DATE);
 
@@ -247,14 +249,14 @@ public class ExcelToJsonConverter {
                         jsonString,
                         companySize,
                         resolvedDefenseYn,
-                        resolvedDefenseDate,
+                        null,
                         DEFAULT_DEL_YN,
                         DEFAULT_CREATE_ID,
                         DEFAULT_CREATE_IP,
-                        createDate,
-                        DEFAULT_UPDATE_VALUE,
-                        DEFAULT_UPDATE_VALUE,
-                        DEFAULT_UPDATE_VALUE
+                        sqlCreateDateTime,
+                        null,
+                        null,
+                        null
                 ));
             }
 
@@ -386,19 +388,26 @@ public class ExcelToJsonConverter {
                 + quoteSql(row.contents()) + ", "
                 + quoteSql(row.companySize()) + ", "
                 + quoteSql(row.defenseDesignationYn()) + ", "
-                + quoteSql(row.defenseDesignationDate()) + ", "
+                + sqlValueOrNull(row.defenseDesignationDate()) + ", "
                 + quoteSql(row.delYn()) + ", "
                 + quoteSql(row.createId()) + ", "
                 + quoteSql(row.createIp()) + ", "
                 + quoteSql(row.createDate()) + ", "
-                + quoteSql(row.updateId()) + ", "
-                + quoteSql(row.updateIp()) + ", "
-                + quoteSql(row.updateDate()) + ");";
+                + sqlValueOrNull(row.updateId()) + ", "
+                + sqlValueOrNull(row.updateIp()) + ", "
+                + sqlValueOrNull(row.updateDate()) + ");";
     }
 
     private static String quoteSql(String value) {
         String normalized = value == null ? "" : value;
         return "'" + normalized.replace("'", "''") + "'";
+    }
+
+    private static String sqlValueOrNull(String value) {
+        if (value == null || value.isBlank()) {
+            return "NULL";
+        }
+        return quoteSql(value);
     }
 
     private static String generateRandomCompanyIdx() {
