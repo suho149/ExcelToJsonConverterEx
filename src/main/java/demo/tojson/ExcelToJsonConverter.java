@@ -72,7 +72,7 @@ public class ExcelToJsonConverter {
     private static final String DEFAULT_DEL_YN = "N";
     private static final String DEFAULT_CREATE_ID = "root01";
     private static final String DEFAULT_CREATE_IP = "0:0:0:0:0:0:0:756";
-    private static final String DEFAULT_UPDATE_VALUE = "\\N";
+    private static final String DEFAULT_UPDATE_VALUE = "NULL";
     private static final DateTimeFormatter SQL_CREATE_DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter SQL_FILE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
     private static final String SQL_OUTPUT_DIR_NAME = "output";
