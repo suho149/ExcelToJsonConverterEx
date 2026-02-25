@@ -17,7 +17,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -69,12 +68,11 @@ public class ExcelToJsonConverter {
     private static final int SHEET4_CONTENTS_FIXED_WIDTH = 60 * 256; // JSON 컬럼 폭 고정
 
     private static final String DEFAULT_DEFENSE_DESIGNATION_YN = "Y";
-    private static final String DEFAULT_DEFENSE_DESIGNATION_DATE = "1900.1.1";
+    private static final String SHEET4_DEFENSE_DESIGNATION_DATE_VALUE = "NULL";
     private static final String DEFAULT_DEL_YN = "N";
     private static final String DEFAULT_CREATE_ID = "root01";
     private static final String DEFAULT_CREATE_IP = "0:0:0:0:0:0:0:756";
     private static final String DEFAULT_UPDATE_VALUE = "\\N";
-    private static final DateTimeFormatter CREATE_DATE_FORMATTER = DateTimeFormatter.ofPattern("yy.MM.d");
     private static final DateTimeFormatter SQL_CREATE_DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter SQL_FILE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
     private static final String SQL_OUTPUT_DIR_NAME = "output";
@@ -223,23 +221,19 @@ public class ExcelToJsonConverter {
                 String companySize = convertCompanySize(companySizeRaw);
                 String defenseDesignationYn = getFirstAvailableCellValue(
                         row, headerIndexMap, "defense_designation_yn", "defenseDesignationYn");
-                String defenseDesignationDate = getFirstAvailableCellValue(
-                        row, headerIndexMap, "defense_designation_date", "defenseDesignationDate");
-                String createDate = LocalDate.now().format(CREATE_DATE_FORMATTER);
-                String sqlCreateDateTime = LocalDateTime.now().format(SQL_CREATE_DATE_TIME_FORMATTER);
+                String createDateTime = LocalDateTime.now().format(SQL_CREATE_DATE_TIME_FORMATTER);
                 String resolvedDefenseYn = defaultIfBlank(defenseDesignationYn, DEFAULT_DEFENSE_DESIGNATION_YN);
-                String resolvedDefenseDate = defaultIfBlank(defenseDesignationDate, DEFAULT_DEFENSE_DESIGNATION_DATE);
 
                 Row outputRow = sheet4.createRow(outputRowIndex++);
                 outputRow.createCell(SHEET4_COMPANY_IDX_COL_INDEX).setCellValue(companyId);
                 outputRow.createCell(SHEET4_CONTENTS_COL_INDEX).setCellValue(jsonString);
                 outputRow.createCell(SHEET4_COMPANY_SIZE_COL_INDEX).setCellValue(companySize);
                 outputRow.createCell(SHEET4_DEFENSE_YN_COL_INDEX).setCellValue(resolvedDefenseYn);
-                outputRow.createCell(SHEET4_DEFENSE_DATE_COL_INDEX).setCellValue(resolvedDefenseDate);
+                outputRow.createCell(SHEET4_DEFENSE_DATE_COL_INDEX).setCellValue(SHEET4_DEFENSE_DESIGNATION_DATE_VALUE);
                 outputRow.createCell(SHEET4_DEL_YN_COL_INDEX).setCellValue(DEFAULT_DEL_YN);
                 outputRow.createCell(SHEET4_CREATE_ID_COL_INDEX).setCellValue(DEFAULT_CREATE_ID);
                 outputRow.createCell(SHEET4_CREATE_IP_COL_INDEX).setCellValue(DEFAULT_CREATE_IP);
-                outputRow.createCell(SHEET4_CREATE_DATE_COL_INDEX).setCellValue(createDate);
+                outputRow.createCell(SHEET4_CREATE_DATE_COL_INDEX).setCellValue(createDateTime);
                 outputRow.createCell(SHEET4_UPDATE_ID_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
                 outputRow.createCell(SHEET4_UPDATE_IP_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
                 outputRow.createCell(SHEET4_UPDATE_DATE_COL_INDEX).setCellValue(DEFAULT_UPDATE_VALUE);
@@ -253,7 +247,7 @@ public class ExcelToJsonConverter {
                         DEFAULT_DEL_YN,
                         DEFAULT_CREATE_ID,
                         DEFAULT_CREATE_IP,
-                        sqlCreateDateTime,
+                        createDateTime,
                         null,
                         null,
                         null
